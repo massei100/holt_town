@@ -209,6 +209,7 @@ function store(room,player,easy) {
 export function makeInterior(kind,profile,easy) {
   const room=roomStage(kind)
   const player=person(room.g,profile)
+  room.playerRoot=player.root
   const {npc}=kind==='store'?store(room,player,easy):home(room,player)
   batchStatic(room.g,new Set([player.root,npc.root]))
   const destination=player.root.position.clone()

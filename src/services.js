@@ -41,6 +41,7 @@ function context(){
   if(audio.state==='suspended') audio.resume().catch(()=>{})
   return audio
 }
+export function unlockAudio(){context()}
 function note(ctx,output,hz,time,duration,volume){
   const osc=ctx.createOscillator(), gain=ctx.createGain()
   osc.type='sine'
