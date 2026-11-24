@@ -1,4 +1,4 @@
-import { expect,test } from '@playwright/test'
+import { chromium,expect,test } from '@playwright/test'
 import { mkdir } from 'node:fs/promises'
 import { OrthographicCamera,Vector3 } from 'three'
 import { deliveryMission } from '../shared/world.js'
@@ -22,13 +22,14 @@ async function snap(page,name){
   await page.screenshot({path:folder+'/'+name+'.png',scale:'css'})
 }
 
-test('two independent students share movement, carrying and delivery with a teacher watching',async({browser,baseURL})=>{
-  const contexts=await Promise.all([
-    browser.newContext({viewport:size,deviceScaleFactor:.46,hasTouch:true,isMobile:true}),
-    browser.newContext({viewport:size,deviceScaleFactor:.46,hasTouch:true,isMobile:true}),
-    browser.newContext({viewport:{width:1920,height:1080},deviceScaleFactor:.44})
-  ])
+test('two independent students share movement, carrying and delivery with a teacher watching',async({launchOptions,baseURL})=>{
+  const browser=await chromium.launch(launchOptions)
   try{
+    const contexts=await Promise.all([
+      browser.newContext({viewport:size,deviceScaleFactor:.46,hasTouch:true,isMobile:true}),
+      browser.newContext({viewport:size,deviceScaleFactor:.46,hasTouch:true,isMobile:true}),
+      browser.newContext({viewport:{width:1920,height:1080},deviceScaleFactor:.44})
+    ])
     const [a,b,t]=await Promise.all(contexts.map(c=>c.newPage()))
     const pageErrors=[]
     for(const [i,page] of [a,b,t].entries()){
@@ -95,7 +96,7 @@ test('two independent students share movement, carrying and delivery with a teac
     await snap(a,'tablet-delivery')
     expect(pageErrors).toEqual([])
   }finally{
-    await Promise.all(contexts.map(c=>c.close()))
+    await browser.close()
   }
 })
 
