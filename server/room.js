@@ -3,6 +3,8 @@ import { clearSegment, directions, distance, doors, encounterRange, exitPoint, p
 import { checkoutDisplay, clerk, missionItems, missionsById, siteFor, zoneOf } from '../shared/missions.js'
 import { characters, shirtColors } from '../src/content.js'
 import { newTraffic, tickTraffic } from './traffic.js'
+import { activeExperience, inCrossingApproach, otherCurb } from '../shared/experiences.js'
+import { beginExperience, requestsGreen, updateExperience, useExperience } from './experiences.js'
 
 const codes='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 export const newToken=()=>randomBytes(24).toString('base64url')
@@ -35,7 +37,7 @@ export class TownRoom {
   addStudent(profile,socket){
     const id=++this.sequence
     const student={id,token:newToken(),socket,awayAt:null,profile:cleanProfile(profile),zone:'town',
-      point:spawn(id-1),angle:Math.PI,input:still(),moving:false,carry:null,wave:0,warp:0}
+      point:spawn(id-1),angle:Math.PI,input:still(),moving:false,carry:null,wave:0,warp:0,experience:null}
     this.students.set(student.token,student)
     return student
   }
@@ -56,6 +58,7 @@ export class TownRoom {
     student.input=still()
     student.angle=Math.PI
     student.moving=false
+    if(student.experience?.id==='crossing'&&student.experience.step==='crossing')student.experience.step='wait'
   }
 
   detach(student,now){
@@ -139,8 +142,12 @@ export class TownRoom {
   tick(dt,now){
     const active=[...this.students.values()].filter(p=>p.socket)
     const moves=active.map(p=>this.movement(p,now))
-    tickTraffic(this.traffic,dt,active.some((student,i)=>this.wantsRoad(student,moves[i])))
-    for(const [i,student] of active.entries())this.move(student,moves[i],dt)
+    tickTraffic(this.traffic,dt,active.some((student,i)=>requestsGreen(student)||this.wantsRoad(student,moves[i])))
+    for(const [i,student] of active.entries()){
+      const previous=student.point
+      this.move(student,moves[i],dt)
+      updateExperience(student,previous,this.traffic.open)
+    }
     this.ticks++
   }
 
@@ -155,6 +162,18 @@ export class TownRoom {
   }
 
   action(student,kind,target,now){
+    if(kind==='experience-start')return beginExperience(student,target)?ok():fail('experience-unavailable')
+    if(kind==='experience-cancel'){
+      student.experience=null
+      return ok()
+    }
+    if(kind==='experience-use')return useExperience(student,target)?ok():fail('too-far')
+    if(kind==='experience-cross'){
+      const e=student.experience
+      if(student.zone!=='town'||e?.id!=='crossing'||e.step!=='wait'||!inCrossingApproach(student.point,e.side))return fail('too-far')
+      if(!this.traffic.open)return fail('red-light')
+      return this.input(student,{kind:'tap',point:otherCurb(e.side)},now)
+    }
     if(kind==='wave'){
       if(now-student.wave<1500)return fail('busy')
       student.wave=now
@@ -166,6 +185,7 @@ export class TownRoom {
       if(student.zone==='town'&&within(student.point,definition.point)){
         student.zone=target
         student.point=[...definition.inside]
+        if(target==='store'&&student.experience?.id==='grocery'&&student.experience.step==='enter')student.experience.step='choose'
       }else if(student.zone===target&&within(student.point,exitPoint)){
         student.zone='town'
         student.point=[...definition.point]
@@ -174,6 +194,7 @@ export class TownRoom {
       student.moving=false
       return ok()
     }
+    if(activeExperience(student))return fail('experience-active')
     if(this.phase!=='active')return fail(this.phase==='finished'?'finished':'waiting')
     if(kind==='checkout'){
       const pending=this.items.get(target)
@@ -197,7 +218,7 @@ export class TownRoom {
     if(kind==='peer'){
       const other=[...this.students.values()].find(p=>p.id===target&&p.socket)
       if(!other||other===student||other.zone!==student.zone||!within(student.point,other.point))return fail('too-far')
-      if(other.carry)return fail('hands-full')
+      if(other.carry||activeExperience(other))return fail('hands-full')
       if(this.mission.method==='peer')return this.finishItem(item,student)
       other.carry=item.id
       item.owner=other.id
@@ -243,7 +264,7 @@ export class TownRoom {
       code:this.code, phase:this.phase, mission:this.mission.id, cycle:this.cycle, tick:this.ticks, lastDelivery:this.lastDelivery,
       players:[...this.students.values()].filter(p=>p.socket).map(p=>({
         id:p.id,...p.profile,zone:p.zone,point:p.point.map(rounded),angle:rounded(p.angle),
-        moving:p.moving,carry:p.carry,wave:p.wave,warp:p.warp
+        moving:p.moving,carry:p.carry,wave:p.wave,warp:p.warp,experience:p.experience
       })),
       items:[...this.items.values()].map(p=>({...p,point:p.point.map(rounded)})),
       road:{open:this.traffic.open,stopping:this.traffic.stopping,cars:this.traffic.cars.map(c=>rounded(c.x))}

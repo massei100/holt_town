@@ -3,6 +3,7 @@ import { makeTown, lights } from '../town.js'
 import { animatePerson, batchStatic, blob, box, cylinder, disposeScene, group, hitBox, label, mat, person, shadow } from '../models.js'
 import { deliveryMission, doors, exitPoint } from '../../shared/world.js'
 import { clerk, missionItems, missionsById, zoneOf } from '../../shared/missions.js'
+import { groceryPoints } from '../../shared/experiences.js'
 
 function tag(parent,kind,target,x,y,z,w,h,d){
   const mesh=hitBox(parent,x,y,z,w,h,d)
@@ -198,6 +199,12 @@ export function createMultiplayerScene(host){
   const focusRing=new T.Mesh(new T.RingGeometry(.63,.82,36),new T.MeshBasicMaterial({color:0xf1aa28,side:T.DoubleSide,transparent:true,opacity:.88,depthWrite:false}))
   focusRing.rotation.x=-Math.PI/2
   focusRing.visible=false
+  const experienceRing=new T.Mesh(new T.RingGeometry(.64,.84,40),new T.MeshBasicMaterial({color:0x315eb6,side:T.DoubleSide,depthWrite:false}))
+  experienceRing.rotation.x=-Math.PI/2
+  experienceRing.visible=false
+  const experienceObject=blob(town.scene,0xf4ae31,0,0,0,.15,.15,.15)
+  experienceObject.visible=false
+  let personalStep=null
 
   let avatar=null,state=null,screen='lobby',zone='town',myId=null,viewRole='student',quality='normal',less=false,overview=false
   let width=0,height=0,pixelRatio=0,span=55,last=performance.now(),time=0,locationChanged=true,selected=null
@@ -223,6 +230,12 @@ export function createMultiplayerScene(host){
       const exit=tag(area.scene,'door',name,exitPoint[0],.65,exitPoint[1],1.56,1.24,.54)
       box(area.scene,0xe4bd68,exitPoint[0],.06,exitPoint[1],1.45,.08,.66)
       area.hits=[exit]
+      if(name==='store'){
+        area.experienceHits=new Map(Object.entries(groceryPoints).map(([id,spot])=>{
+          const [x,y,z]=spot.focus
+          return [id,tag(area.scene,'experience-use',id,x,y,z,id==='milk'?.94:1.4,.91,.86)]
+        }))
+      }
       areas.set(name,area)
       if(state)apply(state)
       return area
@@ -293,18 +306,19 @@ export function createMultiplayerScene(host){
         if(actor.samples.length>6)actor.samples.shift()
       }
       if(player.wave&&player.wave!==actor.target.wave)actor.waveUntil=time+1.2
-      if(actor.item!==player.carry){
+      const displayItem=player.carry??(player.experience?.id==='grocery'&&player.experience.step==='pay'?'shop-milk':null)
+      if(actor.item!==displayItem){
         if(actor.prop){
           actor.prop.visible=false
           actor.prop=null
         }
-        if(player.carry){
+        if(displayItem){
           actor.props??=new Map()
-          if(!actor.props.has(player.carry))actor.props.set(player.carry,parcel(actor.carry,missionItems.get(player.carry),.61))
-          actor.prop=actor.props.get(player.carry)
+          if(!actor.props.has(displayItem))actor.props.set(displayItem,parcel(actor.carry,missionItems.get(displayItem),.61))
+          actor.prop=actor.props.get(displayItem)
           actor.prop.visible=true
         }
-        actor.item=player.carry
+        actor.item=displayItem
       }
       actor.target=player
     }
@@ -363,6 +377,24 @@ export function createMultiplayerScene(host){
     area.scene.add(marker)
     marker.position.set(point[0],zone==='town'?.29:.052,point[1])
     marker.visible=true
+  }
+
+  function showExperience(player,point,green){
+    const area=areas.get(zone)
+    const e=player?.experience
+    personalStep=zone==='store'&&e?.id==='grocery'?{choose:'milk',pay:'register'}[e.step]:null
+    experienceRing.visible=Boolean(area&&point)
+    experienceObject.visible=Boolean(area&&personalStep)
+    if(experienceRing.visible){
+      if(experienceRing.parent!==area.scene)area.scene.add(experienceRing)
+      experienceRing.position.set(point[0],zone==='town'?.34:.07,point[1])
+      experienceRing.material.color.set(e?.id==='crossing'&&green?0x248745:0x315eb6)
+    }
+    if(experienceObject.visible){
+      if(experienceObject.parent!==area.scene)area.scene.add(experienceObject)
+      const [x,y,z]=groceryPoints[personalStep].focus
+      experienceObject.position.set(x,y+.43,z)
+    }
   }
 
   function animate(now){
@@ -470,11 +502,11 @@ export function createMultiplayerScene(host){
   }
   requestAnimationFrame(animate)
   return {
-    show,apply,mark,highlight,setAvatar,
+    show,apply,mark,highlight,setAvatar,showExperience,
     setSession(role,id){viewRole=role;myId=id},
     overview(value){overview=value;locationChanged=true},
     quality(value,reduced){quality=value;less=reduced;resize()},
-    clear(){apply({players:[],items:[],road:null});state=null;highlight(null,null);marker.visible=false},
+    clear(){apply({players:[],items:[],road:null});state=null;highlight(null,null);showExperience(null,null,false);marker.visible=false},
     pick(x,y){
       const area=areas.get(zone)
       const bounds=renderer.domElement.getBoundingClientRect()
@@ -483,6 +515,7 @@ export function createMultiplayerScene(host){
       ray.setFromCamera(pointer,camera)
       const current=missionsById.get(state?.mission)
       const targets=area.hits.filter(hit=>hit.userData.action.kind!=='site'||current?.sites.some(site=>site.id===hit.userData.action.target))
+      if(personalStep&&area.experienceHits?.has(personalStep))targets.push(area.experienceHits.get(personalStep))
       for(const site of current?.sites??[]){
         const spot=sites.get(site.id)
         if(zoneOf(site)===zone&&spot?.hit)targets.push(spot.hit)

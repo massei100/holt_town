@@ -6,6 +6,7 @@ import { koreanVoice,reward,speak,stopSpeech,unlockAudio } from '../services.js'
 import { createMultiplayerScene } from './scene.js'
 import { deliveryMission,distance,doors,encounterRange,exitPoint } from '../../shared/world.js'
 import { clerk, missionItems as items, missionList, missionsById, siteFor, zoneOf } from '../../shared/missions.js'
+import { activeExperience, experienceGoal, experienceGuide, experiences, groceryAction, groceryPoints, inCrossingApproach, nearbyExperiences } from '../../shared/experiences.js'
 
 const root=document.querySelector('#app')
 const host=document.querySelector('#world')
@@ -29,6 +30,7 @@ let session=read(sessionStorage,roomKey),snapshot=null,screen='lobby',panel=null
 let pending=false,teacherPin=false,teacherZone='town',overview=false,held=null,directionTimer=null,press=null,near=null
 let lastDelivery='',lastCycle=0,lastCarry=null,ready=false,initializing=Boolean(session)
 let missionChoice='delivery'
+let lastExperienceCue=''
 
 const messages={
   'no-room':'방을 찾지 못했어요. 코드를 확인해 주세요.','full':'이 방은 학생 15명이 모두 들어왔어요.','server-full':'사용 중인 방이 많아요. 잠시 뒤 다시 해 주세요.',
@@ -38,6 +40,8 @@ const messages={
   'waiting':'교사가 미션을 시작할 때까지 기다려요.','finished':'미션을 모두 마쳤어요.','empty':'먼저 물건을 들어요.',
   'plant-first':'이 화단에는 씨앗을 먼저 심어요.','counter-busy':'친구가 앞 물건을 계산할 때까지 기다려요.',
   'need-clerk':'물건을 올린 학생과 다른 친구가 계산해요.','bad-mission':'미션을 다시 골라 주세요.',
+  'experience-unavailable':'물건을 내려놓고 체험 장소 앞으로 가요.','experience-active':'개인 체험을 끝내거나 닫고 공동 미션에 참여해요.',
+  'red-light':'빨간불이에요. 인도에서 기다려요.',
   'ended':'교사가 게임을 종료했어요.','session-replaced':'이 방이 다른 탭에서 열렸어요.'
 }
 const labels={item:'줍기',drop:'내려놓기',peer:'건네기',site:'놓기',door:'문 열기',checkout:'계산하기'}
@@ -95,6 +99,7 @@ function game(){
     <ul id="mp-roster"></ul></aside>`:
     `<div class="mp-dpad" aria-label="방향 이동" ${settings.movement==='tap'?'hidden':''}>
     ${direction('up','앞으로','up')}${direction('left','왼쪽','left')}${direction('down','뒤로','down')}${direction('right','오른쪽','right')}</div>
+    <section id="mp-experience" class="mp-experience" aria-label="장소별 체험" hidden></section>
     <div class="mp-right"><div class="mp-side-actions">${button('손 흔들기','wave','person','mp-quiet')}${button('내려놓기','drop','down','mp-quiet','hidden')}</div><button type="button" data-action="interact" class="mp-hand" disabled aria-label="상호작용">${icon('touch',35)}<span>상호작용</span></button></div>`}
   <nav class="mp-bottom" aria-label="${teacher?'교사 조작':'게임 조작'}">
     ${teacher?
@@ -144,6 +149,7 @@ function hint(text,symbol=''){
 
 function guidance(){
   const own=me()
+  if(activeExperience(own))return experienceGuide(own,snapshot.road.open)
   const mission=activeMission()
   if(snapshot?.phase==='waiting')return '선생님이 미션을 시작할 때까지 기다려요.'
   if(snapshot?.phase==='finished')return mission.success
@@ -163,6 +169,16 @@ function available(){
   const zone=own.zone
   const mission=activeMission()
   const close=(point)=>distance(own.point,point)<=encounterRange
+  const door=zone==='town'?doors.find(d=>close(d.point)):close(exitPoint)?doors.find(d=>d.id===zone):null
+  if(activeExperience(own)){
+    const target=groceryAction(own)
+    if(target)return {kind:'experience-use',target}
+    const e=own.experience
+    if(e.id==='crossing'&&e.step==='wait'&&zone==='town'&&snapshot.road.open&&inCrossingApproach(own.point,e.side)){
+      return {kind:'experience-cross'}
+    }
+    return door?{kind:'door',target:door.id}:null
+  }
   const byDistance=(a,b)=>distance(own.point,a.point)-distance(own.point,b.point)
   if(snapshot.phase==='active'){
     if(mission.method==='checkout'&&zone===clerk.zone&&distance(own.point,clerk.point)<=clerk.range){
@@ -179,10 +195,34 @@ function available(){
       if(parcel)return {kind:'item',target:parcel.id}
     }
   }
-  const door=zone==='town'?doors.find(d=>close(d.point)):close(exitPoint)?doors.find(d=>d.id===zone):null
   if(door)return {kind:'door',target:door.id}
   if(own.carry&&snapshot.phase==='active')return {kind:'drop'}
   return null
+}
+
+function paintExperience(own){
+  const panel=document.getElementById('mp-experience')
+  if(!panel)return
+  const offer=nearbyExperiences(own)
+  const current=own?.experience
+  const green=snapshot.road.open
+  scene.showExperience(own,experienceGoal(own,green),green)
+  panel.hidden=!ready||!current&&!offer.length
+  if(panel.hidden)return
+  const description=experienceGuide(own,green)
+  const key=current?[current.id,current.step,description].join(':'):offer.join(',')
+  if(panel.dataset.key===key)return
+  panel.dataset.key=key
+  if(current){
+    const info=experiences[current.id]
+    const finished=current.step==='done'
+    const signal=current.id==='crossing'&&!finished?'<span class="mp-signal '+(green?'is-green':'')+'" aria-hidden="true"></span>':''
+    panel.innerHTML='<div class="mp-experience-label">'+icon(finished?'check':info.icon,23)+'<div><strong>'+info.title+'</strong><p>'+signal+description+'</p></div></div>'+
+      button(finished?'닫기':'그만하기','experience-cancel',null,'mp-quiet')
+  }else panel.innerHTML=offer.map(id=>{
+    const info=experiences[id]
+    return button(info.title+' 시작','experience-start:'+id,info.icon,'mp-primary')
+  }).join('')
 }
 
 function paintWorld(){
@@ -231,12 +271,14 @@ function paintWorld(){
     ui.querySelector('[data-action="teacher:end"]').disabled=!ready
   }
   near=available()
+  paintExperience(me())
   const carried=items.get(me()?.carry)
   scene.highlight(near,carried?siteFor(carried)?.id:undefined)
   const hand=ui.querySelector('.mp-hand')
   if(hand){
     const kind=near?.kind??''
-    const title=kind==='site'?(carried?.verb??mission.goal):kind==='item'&&mission.method==='collect'?'보물 줍기':labels[kind]??'상호작용'
+    const title=kind==='experience-use'?groceryPoints[near.target].label:kind==='experience-cross'?'초록불에 건너기':
+      kind==='site'?(carried?.verb??mission.goal):kind==='item'&&mission.method==='collect'?'보물 줍기':labels[kind]??'상호작용'
     if(hand.dataset.label!==title){
       hand.dataset.label=title
       hand.innerHTML=icon('touch',35)+'<span>'+title+'</span>'
@@ -256,6 +298,14 @@ function receive(world){
   if(priorZone!==currentZone())scene.mark(null)
   scene.show('game',currentZone())
   paintWorld()
+  const own=me()
+  const e=own?.experience
+  const cue=e?[e.id,e.step,experienceGuide(own,world.road.open)].join(':'):''
+  if(cue&&cue!==lastExperienceCue){
+    if(e.step==='done')reward(settings)
+    talk(experienceGuide(own,world.road.open))
+  }
+  lastExperienceCue=cue
   const delivery=world.lastDelivery&&world.cycle+':'+world.lastDelivery.item
   if(delivery&&delivery!==lastDelivery){
     lastDelivery=delivery
@@ -264,8 +314,8 @@ function receive(world){
     const item=items.get(world.lastDelivery.item)
     const mission=activeMission()
     const text=done?mission.success:mission.id==='delivery'?item.name+' 배달 완료!':item.name+' 완료!'
-    hint(text,done?'★':'✓');talk(text)
-  }else if(world.phase==='active'&&world.cycle!==lastCycle&&session.role==='student')talk(guidance())
+    hint(text,done?'★':'✓');if(!activeExperience(own))talk(text)
+  }else if(world.phase==='active'&&world.cycle!==lastCycle&&session.role==='student'&&!activeExperience(own))talk(guidance())
   const carry=me()?.carry
   if(carry&&carry!==lastCarry&&session.role==='student')talk(guidance())
   lastCarry=carry
@@ -286,6 +336,8 @@ function accept(reply){
   if(session.role==='teacher')missionChoice=activeMission().id
   lastDelivery=snapshot.lastDelivery?snapshot.cycle+':'+snapshot.lastDelivery.item:''
   lastCycle=snapshot.cycle;lastCarry=me()?.carry
+  const own=me()
+  lastExperienceCue=own?.experience?[own.experience.id,own.experience.step,experienceGuide(own,snapshot.road.open)].join(':'):''
   scene.setSession(session.role,session.id)
   scene.overview(overview)
   scene.apply(snapshot)
@@ -297,7 +349,7 @@ function abandon(message=''){
   release()
   sessionStorage.removeItem(roomKey)
   session=null;snapshot=null;screen='lobby';panel=null;ready=false;initializing=false
-  lastDelivery='';lastCycle=0;lastCarry=null;teacherZone='town';overview=false;near=null
+  lastDelivery='';lastCycle=0;lastCarry=null;lastExperienceCue='';teacherZone='town';overview=false;near=null
   stopSpeech();scene.clear();scene.overview(false);scene.show('lobby')
   entryMessage=message
   render()
@@ -319,7 +371,11 @@ async function enter(event,payload){
 function perform(action){
   if(!action||!ready)return
   void request('act',action).then(reply=>{
-    if(reply.ok||reply.error==='busy')return
+    if(reply.ok){
+      if(reply.point)scene.mark(reply.point)
+      return
+    }
+    if(reply.error==='busy')return
     const text=messages[reply.error]
     if(text){hint(text,reply.error==='wrong-site'&&me()?.carry?items.get(me().carry).symbol:'');talk(text)}
   })
@@ -391,6 +447,8 @@ async function onAction(action){
     talk(guidance())
     if(!settings.voice||!koreanVoice())hint(guidance(),'♪')
   }else if(name==='interact')perform(available())
+  else if(name==='experience-start')perform({kind:'experience-start',target:arg})
+  else if(name==='experience-cancel')perform({kind:'experience-cancel'})
   else if(name==='drop')perform({kind:'drop'})
   else if(name==='wave')perform({kind:'wave'})
   else if(name==='watch'){
@@ -406,6 +464,8 @@ function hitNear(action){
     const door=doors.find(p=>p.id===target)
     return door&&(zone==='town'?distance(own.point,door.point)<=encounterRange:zone===target&&distance(own.point,exitPoint)<=encounterRange)
   }
+  if(kind==='experience-use')return groceryAction(own)===target
+  if(activeExperience(own))return false
   if(snapshot.phase!=='active')return false
   if(kind==='checkout'){
     const pending=snapshot.items.find(p=>p.id===target)
