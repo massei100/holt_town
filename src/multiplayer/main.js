@@ -278,6 +278,7 @@ function paintWorld(){
   if(hand){
     const kind=near?.kind??''
     const title=kind==='experience-use'?groceryPoints[near.target].label:kind==='experience-cross'?'초록불에 건너기':
+      kind==='door'&&currentZone()!=='town'?'밖으로 나가기':
       kind==='site'?(carried?.verb??mission.goal):kind==='item'&&mission.method==='collect'?'보물 줍기':labels[kind]??'상호작용'
     if(hand.dataset.label!==title){
       hand.dataset.label=title
@@ -294,10 +295,12 @@ function receive(world){
   if(!session||world?.code!==session.code)return
   const priorZone=currentZone()
   snapshot=world
+  const zone=currentZone()
   scene.apply(world)
-  if(priorZone!==currentZone())scene.mark(null)
-  scene.show('game',currentZone())
+  if(priorZone!==zone)scene.mark(null)
+  scene.show('game',zone)
   paintWorld()
+  if(session.role==='student'&&priorZone!==zone&&zone!=='town')hint(zones[zone]+' 안에 들어왔어요.')
   const own=me()
   const e=own?.experience
   const cue=e?[e.id,e.step,experienceGuide(own,world.road.open)].join(':'):''
@@ -370,6 +373,7 @@ async function enter(event,payload){
 
 function perform(action){
   if(!action||!ready)return
+  if(action.kind==='door')action={...action,from:currentZone()}
   void request('act',action).then(reply=>{
     if(reply.ok){
       if(reply.point)scene.mark(reply.point)

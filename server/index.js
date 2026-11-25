@@ -142,8 +142,9 @@ export function createGameServer({teacherPin=process.env.TEACHER_PIN,dist=fileUR
     socket.on('act',(data,ack)=>{
       const session=active(socket)
       if(!session?.player)return report(ack,failure('role'))
-      if(!rate(socket,'action',240))return report(ack,failure('busy'))
-      const result=session.room.action(session.player,data?.kind,data?.target,Date.now())
+      const kind=data?.kind
+      if(!rate(socket,kind==='door'?'door':'action',240))return report(ack,failure('busy'))
+      const result=session.room.action(session.player,kind,data?.target,Date.now(),data?.from)
       report(ack,result)
       if(result.ok)publish(session.room,true)
     })

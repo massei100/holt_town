@@ -23,7 +23,7 @@ async function open(t,options={}){
     await once(socket,'connect')
     return socket
   }
-  return {client,address}
+  return {client,address,rooms:service.rooms}
 }
 const ask=(socket,event,data)=>socket.timeout(5000).emitWithAck(event,...(data===undefined?[]:[data]))
 async function stateSocket(socket,condition){
@@ -38,6 +38,29 @@ async function stateSocket(socket,condition){
     socket.on('world',handler)
   })
 }
+
+test('the store door opens immediately after selecting groceries and ignores a repeated entry',async t=>{
+  const service=await open(t)
+  const teacher=await service.client(),student=await service.client()
+  const created=await ask(teacher,'room:create',{})
+  const joined=await ask(student,'room:join',{code:created.code,profile:{}})
+  assert.equal(joined.ok,true)
+  const player=service.rooms.get(created.code).students.get(joined.token)
+  const store=doors.find(door=>door.id==='store')
+  player.point=[...store.point]
+  assert.equal((await ask(student,'act',{kind:'experience-start',target:'grocery'})).ok,true)
+  const entry={kind:'door',target:'store',from:'town'}
+  const opened=await ask(student,'act',entry)
+  assert.equal(opened.ok,true,opened.error)
+  assert.equal(player.zone,'store')
+  assert.equal(player.experience.step,'choose')
+  await sleep(260)
+  assert.equal((await ask(student,'act',entry)).ok,false)
+  assert.equal(player.zone,'store')
+  await sleep(260)
+  assert.equal((await ask(student,'act',{...entry,from:'store'})).ok,true)
+  assert.equal(player.zone,'town')
+})
 
 test('navigation keeps planned routes away from building footprints and uses the marked crossing',()=>{
   const start=spawn(0)

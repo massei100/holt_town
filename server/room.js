@@ -161,7 +161,7 @@ export class TownRoom {
     return ok({delivery:true})
   }
 
-  action(student,kind,target,now){
+  action(student,kind,target,now,from){
     if(kind==='experience-start')return beginExperience(student,target)?ok():fail('experience-unavailable')
     if(kind==='experience-cancel'){
       student.experience=null
@@ -180,6 +180,7 @@ export class TownRoom {
       return ok()
     }
     if(kind==='door'){
+      if(from!==undefined&&from!==student.zone)return fail('busy')
       const definition=doors.find(p=>p.id===target)
       if(!definition)return fail('too-far')
       if(student.zone==='town'&&within(student.point,definition.point)){

@@ -1,5 +1,6 @@
 import * as T from 'three'
 import { makeTown, lights } from '../town.js'
+import { makeInterior } from '../interiors.js'
 import { animatePerson, batchStatic, blob, box, cylinder, disposeScene, group, hitBox, label, mat, person, shadow } from '../models.js'
 import { deliveryMission, doors, exitPoint } from '../../shared/world.js'
 import { clerk, missionItems, missionsById, zoneOf } from '../../shared/missions.js'
@@ -166,7 +167,6 @@ export function createMultiplayerScene(host){
   cylinder(avatarScene,0xf3e5c5,0,.008,0,1.41,.04)
   shadow(avatarScene,0,0,.55,.39)
   const areas=new Map([['town',{scene:town.scene,hits}]])
-  const pending=new Map()
   const actors=new Map()
   const parcels=new Map()
   const sites=new Map()
@@ -221,33 +221,26 @@ export function createMultiplayerScene(host){
   new ResizeObserver(resize).observe(host)
   resize()
 
-  async function loadZone(name){
-    if(areas.has(name))return areas.get(name)
-    if(pending.has(name))return pending.get(name)
-    const load=import('../interiors.js').then(({makeInterior})=>{
-      const area=makeInterior(name,{index:0},true)
-      area.playerRoot.removeFromParent()
-      const exit=tag(area.scene,'door',name,exitPoint[0],.65,exitPoint[1],1.56,1.24,.54)
-      box(area.scene,0xe4bd68,exitPoint[0],.06,exitPoint[1],1.45,.08,.66)
-      area.hits=[exit]
-      if(name==='store'){
-        area.experienceHits=new Map(Object.entries(groceryPoints).map(([id,spot])=>{
-          const [x,y,z]=spot.focus
-          return [id,tag(area.scene,'experience-use',id,x,y,z,id==='milk'?.94:1.4,.91,.86)]
-        }))
-      }
-      areas.set(name,area)
-      if(state)apply(state)
-      return area
-    }).finally(()=>pending.delete(name))
-    pending.set(name,load)
-    return load
+  function buildZone(name){
+    const area=makeInterior(name,{index:0},true)
+    area.playerRoot.removeFromParent()
+    const exit=tag(area.scene,'door',name,exitPoint[0],.65,exitPoint[1],1.56,1.24,.54)
+    box(area.scene,0xe4bd68,exitPoint[0],.06,exitPoint[1],1.45,.08,.66)
+    area.hits=[exit]
+    if(name==='store'){
+      area.experienceHits=new Map(Object.entries(groceryPoints).map(([id,spot])=>{
+        const [x,y,z]=spot.focus
+        return [id,tag(area.scene,'experience-use',id,x,y,z,id==='milk'?.94:1.4,.91,.86)]
+      }))
+    }
+    areas.set(name,area)
+    if(state)apply(state)
   }
 
   function show(nextScreen,nextZone='town'){
     if(nextScreen!==screen||nextZone!==zone)locationChanged=true
     screen=nextScreen;zone=nextZone
-    if(screen==='game'&&!areas.has(zone))void loadZone(zone).catch(console.error)
+    if(screen==='game'&&!areas.has(zone))buildZone(zone)
     if(screen!=='game'||marker.parent!==areas.get(zone)?.scene)marker.visible=false
   }
 
