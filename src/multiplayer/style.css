@@ -79,7 +79,7 @@ legend{font-weight:810;margin-bottom:4px}
 .mp-goal>div:nth-child(2){flex:1;display:grid;gap:4px}
 #mp-count{background:#e8eff8;color:#1d4679;padding:5px 8px;border-radius:9px;white-space:nowrap}
 .mp-progress{display:flex;gap:4px}
-.mp-symbol{width:25px;height:22px;display:inline-grid;place-items:center;border-radius:5px;background:var(--parcel);color:#fff;font-size:17px;line-height:1;font-weight:850}
+.mp-symbol{width:25px;height:22px;display:inline-grid;place-items:center;border-radius:5px;background:var(--parcel);color:var(--symbol-ink,#fff);font-size:17px;line-height:1;font-weight:850}
 .mp-symbol.is-done{outline:2px solid #225a4b;outline-offset:1px;position:relative}
 .mp-symbol.is-done:after{content:"✓";width:14px;height:14px;border-radius:50%;background:#254c3e;color:white;position:absolute;right:-4px;bottom:-4px;font-size:11px;text-align:center;padding-top:1px}
 .mp-code{justify-self:end;pointer-events:auto}

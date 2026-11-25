@@ -1,20 +1,12 @@
 import { places } from '../src/content.js'
 import { CROSS_X } from '../src/game.js'
+import { deliveryMission } from './missions.js'
+export { deliveryMission } from './missions.js'
 
 export const encounterRange=2.25
 export const limit=15
 export const speed=5.8
 export const rooms=['town','home','store']
-export const deliveryMission={
-  id:'delivery',
-  title:'우리 동네 배달부',
-  items:[
-    {id:'red',   color:'#c94c42', symbol:'★', name:'별',   start:[-10.7,10.7], site:[-24,19.7]},
-    {id:'blue',  color:'#2763b7', symbol:'◆', name:'마름모', start:[-9,10.7], site:[-11.5,19.6], house:[-11.5,16.4]},
-    {id:'gold',  color:'#e9aa27', symbol:'●', name:'동그라미', start:[-7.3,10.7], site:[19,22.2], house:[19,19]},
-    {id:'green', color:'#47883d', symbol:'▲', name:'세모', start:[-5.6,10.7], site:[35,20.4], house:[35,17.2]}
-  ]
-}
 export const doors=[
   {id:'home', point:[-24,19.3], inside:[-.2,3.95]},
   {id:'store', point:[-13,-8.85], inside:[-.2,3.95]}

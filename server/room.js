@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
-import { clearSegment, deliveryMission, directions, distance, doors, encounterRange, exitPoint, planPath, road, rounded, spawn, speed, walkable } from '../shared/world.js'
+import { clearSegment, directions, distance, doors, encounterRange, exitPoint, planPath, road, rounded, spawn, speed, walkable } from '../shared/world.js'
+import { checkoutDisplay, clerk, missionItems, missionsById, siteFor, zoneOf } from '../shared/missions.js'
 import { characters, shirtColors } from '../src/content.js'
 import { newTraffic, tickTraffic } from './traffic.js'
 
@@ -39,11 +40,12 @@ export class TownRoom {
     return student
   }
 
-  reset(phase){
+  reset(phase,mission=this.mission?.id??'delivery'){
+    this.mission=missionsById.get(mission)
     this.phase=phase
     this.cycle++
     this.lastDelivery=null
-    this.items=new Map(deliveryMission.items.map(p=>[p.id,{id:p.id,point:[...p.start],zone:'town',owner:null,delivered:false}]))
+    this.items=new Map(this.mission.items.map(p=>[p.id,{id:p.id,point:[...p.start],zone:zoneOf(p),owner:null,delivered:false,checkoutBy:null}]))
     for(const student of this.students.values())student.carry=null
   }
 
@@ -68,8 +70,9 @@ export class TownRoom {
     const item=this.items.get(student.carry)
     if(item&&!item.delivered){
       item.owner=null
-      item.zone='town'
-      item.point=[...deliveryMission.items.find(p=>p.id===item.id).start]
+      const definition=missionItems.get(item.id)
+      item.zone=zoneOf(definition)
+      item.point=[...definition.start]
     }
     this.students.delete(student.token)
   }
@@ -141,6 +144,16 @@ export class TownRoom {
     this.ticks++
   }
 
+  finishItem(item,student){
+    if(item.owner===student.id)student.carry=null
+    item.delivered=true
+    item.owner=null
+    item.checkoutBy=null
+    this.lastDelivery={item:item.id,by:student.id}
+    if([...this.items.values()].every(p=>p.delivered))this.phase='finished'
+    return ok({delivery:true})
+  }
+
   action(student,kind,target,now){
     if(kind==='wave'){
       if(now-student.wave<1500)return fail('busy')
@@ -162,11 +175,19 @@ export class TownRoom {
       return ok()
     }
     if(this.phase!=='active')return fail(this.phase==='finished'?'finished':'waiting')
+    if(kind==='checkout'){
+      const pending=this.items.get(target)
+      if(this.mission.method!=='checkout'||!pending?.checkoutBy||pending.delivered)return fail('unavailable')
+      if(pending.checkoutBy===student.id)return fail('need-clerk')
+      if(student.zone!==clerk.zone||distance(student.point,clerk.point)>clerk.range)return fail('too-far')
+      return this.finishItem(pending,student)
+    }
     if(kind==='item'){
       const item=this.items.get(target)
       if(student.carry)return fail('hands-full')
-      if(!item||item.owner||item.delivered)return fail('unavailable')
+      if(!item||item.owner||item.delivered||item.checkoutBy)return fail('unavailable')
       if(item.zone!==student.zone||!within(student.point,item.point))return fail('too-far')
+      if(this.mission.method==='collect')return this.finishItem(item,student)
       item.owner=student.id
       student.carry=item.id
       return ok()
@@ -177,27 +198,35 @@ export class TownRoom {
       const other=[...this.students.values()].find(p=>p.id===target&&p.socket)
       if(!other||other===student||other.zone!==student.zone||!within(student.point,other.point))return fail('too-far')
       if(other.carry)return fail('hands-full')
+      if(this.mission.method==='peer')return this.finishItem(item,student)
       other.carry=item.id
       item.owner=other.id
       student.carry=null
       return ok()
     }
     if(kind==='site'){
-      const site=deliveryMission.items.find(p=>p.id===target)
-      if(!site||student.zone!=='town'||!within(student.point,site.site))return fail('too-far')
-      if(item.id!==site.id)return fail('wrong-site')
-      item.delivered=true
-      item.zone='town'
-      item.point=[...site.site]
-      item.owner=null
-      student.carry=null
-      this.lastDelivery={item:item.id,by:student.id}
-      if([...this.items.values()].every(p=>p.delivered))this.phase='finished'
-      return ok({delivery:true})
+      const site=this.mission.sites.find(p=>p.id===target)
+      if(!site||student.zone!==zoneOf(site)||!within(student.point,site.point))return fail('too-far')
+      const definition=missionItems.get(item.id)
+      if(siteFor(definition)?.id!==site.id)return fail('wrong-site')
+      if(definition.requires&&!this.items.get(definition.requires)?.delivered)return fail('plant-first')
+      item.zone=zoneOf(site)
+      item.point=[...site.point]
+      if(this.mission.method==='checkout'){
+        if([...this.items.values()].some(p=>p.checkoutBy))return fail('counter-busy')
+        item.point=[...checkoutDisplay]
+        item.checkoutBy=student.id
+        item.owner=null
+        student.carry=null
+        return ok()
+      }
+      return this.finishItem(item,student)
     }
     if(kind==='drop'){
       if(student.zone==='town'&&Math.abs(student.point[1])<road.edge+.38)return fail('road')
-      const nearSite=student.zone==='town'&&deliveryMission.items.find(p=>within(student.point,p.site))
+      const nearSite=this.mission.sites
+        .filter(p=>p!==clerk&&zoneOf(p)===student.zone&&within(student.point,p.point))
+        .sort((a,b)=>distance(student.point,a.point)-distance(student.point,b.point))[0]
       if(nearSite)return this.action(student,'site',nearSite.id,now)
       if(!walkable(student.zone,...student.point))return fail('blocked')
       item.point=[...student.point]
@@ -211,7 +240,7 @@ export class TownRoom {
 
   snapshot(){
     return {
-      code:this.code, phase:this.phase, cycle:this.cycle, tick:this.ticks, lastDelivery:this.lastDelivery,
+      code:this.code, phase:this.phase, mission:this.mission.id, cycle:this.cycle, tick:this.ticks, lastDelivery:this.lastDelivery,
       players:[...this.students.values()].filter(p=>p.socket).map(p=>({
         id:p.id,...p.profile,zone:p.zone,point:p.point.map(rounded),angle:rounded(p.angle),
         moving:p.moving,carry:p.carry,wave:p.wave,warp:p.warp

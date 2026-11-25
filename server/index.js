@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import express from 'express'
 import { Server } from 'socket.io'
 import { limit } from '../shared/world.js'
+import { missionsById } from '../shared/missions.js'
 import { makeCode, newToken, TownRoom } from './room.js'
 
 const maximumRooms=24
@@ -153,13 +154,15 @@ export function createGameServer({teacherPin=process.env.TEACHER_PIN,dist=fileUR
       if(!['start','restart','safe','end'].includes(command))return report(ack,failure('bad-input'))
       if(!rate(socket,'teacher:'+command,400))return report(ack,failure('busy'))
       const {room}=session
+      const mission=data?.mission??room.mission.id
+      if(!missionsById.has(mission))return report(ack,failure('bad-mission'))
       switch(command){
         case 'start':
           if(room.phase!=='waiting')return report(ack,failure('already-started'))
-          room.reset('active')
+          room.reset('active',mission)
           break
         case 'restart':
-          room.reset('active')
+          room.reset('active',mission)
           break
         case 'safe':
           for(const student of room.students.values())room.safe(student)

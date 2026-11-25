@@ -5,6 +5,7 @@ import { icon } from '../icons.js'
 import { koreanVoice,reward,speak,stopSpeech,unlockAudio } from '../services.js'
 import { createMultiplayerScene } from './scene.js'
 import { deliveryMission,distance,doors,encounterRange,exitPoint } from '../../shared/world.js'
+import { clerk, missionItems as items, missionList, missionsById, siteFor, zoneOf } from '../../shared/missions.js'
 
 const root=document.querySelector('#app')
 const host=document.querySelector('#world')
@@ -17,7 +18,6 @@ function read(storage,key){
 const settings={movement:'hold',device:'tablet',quality:'normal',voice:true,effects:true,reduced:matchMedia('(prefers-reduced-motion: reduce)').matches,volume:.65,...read(localStorage,prefsKey)}
 const escape=(text='')=>String(text).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))
 const zones={town:'마을',home:'우리 집',store:'편의점'}
-const items=new Map(deliveryMission.items.map(item=>[item.id,item]))
 const initial={index:0,color:characters[0].top,nickname:''}
 const profile={...initial}
 const socket=io({autoConnect:false,reconnectionDelay:400,reconnectionDelayMax:2800})
@@ -27,21 +27,25 @@ try{scene=createMultiplayerScene(host)}catch{
 }
 let session=read(sessionStorage,roomKey),snapshot=null,screen='lobby',panel=null,enteredCode='',entryMessage='',hintTimer=null
 let pending=false,teacherPin=false,teacherZone='town',overview=false,held=null,directionTimer=null,press=null,near=null
-let lastDelivery='',lastPhase='',lastCarry=null,ready=false,viewTimer=0,initializing=Boolean(session)
+let lastDelivery='',lastCycle=0,lastCarry=null,ready=false,initializing=Boolean(session)
+let missionChoice='delivery'
 
 const messages={
   'no-room':'방을 찾지 못했어요. 코드를 확인해 주세요.','full':'이 방은 학생 15명이 모두 들어왔어요.','server-full':'사용 중인 방이 많아요. 잠시 뒤 다시 해 주세요.',
   'teacher-pin':'교사 코드를 확인해 주세요.','busy':'잠깐만 기다려요.','expired':'이 방의 접속이 만료됐어요. 새 방 코드로 다시 들어가요.',
   'network':'연결을 확인하고 다시 눌러 주세요.','too-far':'조금 더 가까이 가요.','blocked':'걸을 수 있는 바닥을 눌러요.','road':'인도에서 상자를 내려놓아요.',
-  'wrong-site':'들고 있는 상자와 같은 기호의 집을 찾아요.','unavailable':'친구가 먼저 상자를 집었어요.','hands-full':'한 번에 상자 하나를 들어요.',
-  'waiting':'교사가 미션을 시작할 때까지 기다려요.','finished':'배달을 모두 마쳤어요.','empty':'먼저 상자를 들어요.',
+  'wrong-site':'들고 있는 물건과 같은 기호가 있는 곳을 찾아요.','unavailable':'친구가 먼저 물건을 집었어요.','hands-full':'한 번에 물건 하나를 들어요.',
+  'waiting':'교사가 미션을 시작할 때까지 기다려요.','finished':'미션을 모두 마쳤어요.','empty':'먼저 물건을 들어요.',
+  'plant-first':'이 화단에는 씨앗을 먼저 심어요.','counter-busy':'친구가 앞 물건을 계산할 때까지 기다려요.',
+  'need-clerk':'물건을 올린 학생과 다른 친구가 계산해요.','bad-mission':'미션을 다시 골라 주세요.',
   'ended':'교사가 게임을 종료했어요.','session-replaced':'이 방이 다른 탭에서 열렸어요.'
 }
-const labels={item:['줍기','bag'],drop:['내려놓기','down'],peer:['건네기','person'],site:['배달하기','check'],door:['문 열기','enter']}
+const labels={item:'줍기',drop:'내려놓기',peer:'건네기',site:'놓기',door:'문 열기',checkout:'계산하기'}
 const nameOf=person=>person.nickname||'플레이어 '+person.id
 const me=()=>snapshot?.players.find(player=>player.id===session?.id)
 const currentZone=()=>session?.role==='teacher'?teacherZone:me()?.zone??'town'
-const badge=(item,extra='')=>'<span aria-hidden="true" class="mp-symbol '+extra+'" style="--parcel:'+item.color+'">'+item.symbol+'</span>'
+const activeMission=()=>missionsById.get(snapshot?.mission)??deliveryMission
+const badge=(item,extra='')=>'<span aria-hidden="true" class="mp-symbol '+extra+'" style="--parcel:'+item.color+';--symbol-ink:'+(item.ink??'#fff')+'">'+item.symbol+'</span>'
 function button(text,action,symbol,kind='',extra=''){
   return '<button type="button" class="mp-button '+kind+'" data-action="'+action+'" '+extra+'>'+(symbol?icon(symbol):'')+'<span>'+text+'</span></button>'
 }
@@ -80,11 +84,13 @@ function game(){
   const teacher=session.role==='teacher'
   const direction=(name,label,grid)=>'<button type="button" class="mp-direction" data-dir="'+name+'" aria-label="'+label+'" style="grid-area:'+grid+'">'+icon(name,31)+'</button>'
   return `<header class="mp-top"><div class="mp-online">${icon('person')} <strong id="mp-online">0명</strong><span id="mp-network" role="status"></span></div>
-     <div class="mp-goal" aria-label="공동 미션 진행"><div class="mp-goal-icon">${icon('bag',25)}</div>
+     <div class="mp-goal" aria-label="공동 미션 진행"><div id="mp-mission-icon" class="mp-goal-icon">${icon('bag',25)}</div>
        <div><strong id="mp-goal-title">우리 동네 배달부</strong><div class="mp-progress" id="mp-progress"></div></div><strong id="mp-count">0 / 4</strong></div>
      ${teacher?'<div class="mp-code"><span>접속 코드</span><strong>'+escape(session.code)+'</strong>'+button('복사','copy-code',null,'mp-quiet')+'</div>':''}</header>
   <div id="mp-tags" class="mp-tags" aria-hidden="true"></div><div id="mp-hint" class="mp-hint" role="status" hidden></div>
-  ${teacher?`<aside class="mp-roster"><label for="mp-area">관람 장소</label>
+  ${teacher?`<aside class="mp-roster"><label for="mp-mission">공동 미션 선택</label>
+    <select id="mp-mission">${missionList.map(m=>'<option value="'+m.id+'"'+(m.id===missionChoice?' selected':'')+'>'+m.title+'</option>').join('')}</select>
+    <label for="mp-area">관람 장소</label>
     <select id="mp-area">${Object.entries(zones).map(([id,text])=>'<option value="'+id+'"'+(id===teacherZone?' selected':'')+'>'+text+'</option>').join('')}</select>
     <ul id="mp-roster"></ul></aside>`:
     `<div class="mp-dpad" aria-label="방향 이동" ${settings.movement==='tap'?'hidden':''}>
@@ -138,26 +144,38 @@ function hint(text,symbol=''){
 
 function guidance(){
   const own=me()
+  const mission=activeMission()
   if(snapshot?.phase==='waiting')return '선생님이 미션을 시작할 때까지 기다려요.'
-  if(snapshot?.phase==='finished')return '친구들과 배달을 모두 마쳤어요!'
-  if(own?.carry)return items.get(own.carry).name+' 기호가 있는 집에 상자를 배달해요.'
-  return '배송 광장에서 상자에 가까이 가고 손 모양 버튼을 눌러요.'
+  if(snapshot?.phase==='finished')return mission.success
+  if(own?.carry&&mission.method==='place'){
+    const item=items.get(own.carry),site=siteFor(item)
+    if(item.requires&&!snapshot.items.find(p=>p.id===item.requires)?.delivered)return '같은 화단에 씨앗을 먼저 심어요.'
+    if(item.verb==='심기')return site.name+'에 씨앗을 심어요.'
+    if(item.verb==='물 주기')return site.name+'에 물을 줘요.'
+    return site.name+' 기호가 있는 곳으로 가져가요.'
+  }
+  return mission.guide
 }
 
 function available(){
   const own=me()
   if(!own||!ready)return null
   const zone=own.zone
+  const mission=activeMission()
   const close=(point)=>distance(own.point,point)<=encounterRange
   const byDistance=(a,b)=>distance(own.point,a.point)-distance(own.point,b.point)
   if(snapshot.phase==='active'){
+    if(mission.method==='checkout'&&zone===clerk.zone&&distance(own.point,clerk.point)<=clerk.range){
+      const pending=snapshot.items.find(item=>item.checkoutBy&&item.checkoutBy!==own.id)
+      if(pending)return {kind:'checkout',target:pending.id}
+    }
     if(own.carry){
-      const site=zone==='town'&&deliveryMission.items.find(item=>close(item.site))
+      const site=mission.sites.filter(item=>item!==clerk&&zoneOf(item)===zone&&close(item.point)).sort(byDistance)[0]
       if(site)return {kind:'site',target:site.id}
       const friend=snapshot.players.filter(p=>p.id!==own.id&&p.zone===zone&&!p.carry&&close(p.point)).sort(byDistance)[0]
       if(friend)return {kind:'peer',target:friend.id}
     }else{
-      const parcel=snapshot.items.filter(item=>item.zone===zone&&!item.owner&&!item.delivered&&close(item.point)).sort(byDistance)[0]
+      const parcel=snapshot.items.filter(item=>item.zone===zone&&!item.owner&&!item.delivered&&!item.checkoutBy&&close(item.point)).sort(byDistance)[0]
       if(parcel)return {kind:'item',target:parcel.id}
     }
   }
@@ -172,11 +190,21 @@ function paintWorld(){
   const progress=document.getElementById('mp-progress')
   if(!progress)return
   const online=document.getElementById('mp-online')
-  online.textContent=snapshot.players.length+'명'
+  const onlineCount=snapshot.players.length+'명'
+  if(online.textContent!==onlineCount)online.textContent=onlineCount
   const count=snapshot.items.filter(p=>p.delivered).length
-  document.getElementById('mp-count').textContent=count+' / '+deliveryMission.items.length
+  const mission=activeMission()
+  const countLabel=count+' / '+snapshot.items.length
+  const counter=document.getElementById('mp-count')
+  if(counter.textContent!==countLabel)counter.textContent=countLabel
   const goal=document.getElementById('mp-goal-title')
-  goal.textContent=snapshot.phase==='finished'?'함께 배달 완료!':snapshot.phase==='waiting'?'미션 준비 중':deliveryMission.title
+  const title=snapshot.phase==='finished'?'함께 미션 완료!':snapshot.phase==='waiting'?'미션 준비 중':mission.title
+  if(goal.textContent!==title)goal.textContent=title
+  const goalIcon=document.getElementById('mp-mission-icon')
+  if(goalIcon.dataset.icon!==mission.icon){
+    goalIcon.dataset.icon=mission.icon
+    goalIcon.innerHTML=icon(mission.icon,25)
+  }
   const stamps=JSON.stringify(snapshot.items.map(item=>[item.id,item.delivered]))
   if(progress.dataset.stamps!==stamps){
     progress.innerHTML=snapshot.items.map(item=>badge(items.get(item.id),item.delivered?'is-done':'')).join('')
@@ -194,20 +222,25 @@ function paintWorld(){
       studentRoster.innerHTML=snapshot.players.length?snapshot.players.map(p=>'<li><button type="button" data-action="watch:'+p.zone+'"><strong>'+escape(nameOf(p))+'</strong><span>'+zones[p.zone]+'</span></button></li>').join(''):'<li>학생 입장을 기다려요.</li>'
     }
     ui.querySelector('[data-action="teacher:start"]').disabled=!ready||snapshot.phase!=='waiting'
-    ui.querySelector('[data-action="teacher:restart"]').disabled=!ready||snapshot.phase==='waiting'
+    const restart=ui.querySelector('[data-action="teacher:restart"]')
+    restart.disabled=!ready||snapshot.phase==='waiting'
+    const restartLabel=missionChoice===mission.id?'다시 시작':'선택한 미션 시작'
+    const restartText=restart.querySelector('span')
+    if(restartText.textContent!==restartLabel)restartText.textContent=restartLabel
     ui.querySelector('[data-action="teacher:safe"]').disabled=!ready||!snapshot.players.length
     ui.querySelector('[data-action="teacher:end"]').disabled=!ready
   }
   near=available()
-  scene.highlight(near,me()?.carry)
+  const carried=items.get(me()?.carry)
+  scene.highlight(near,carried?siteFor(carried)?.id:undefined)
   const hand=ui.querySelector('.mp-hand')
   if(hand){
-    const selected=near?labels[near.kind]:['상호작용','touch']
     const kind=near?.kind??''
-    if(hand.dataset.kind!==kind){
-      hand.dataset.kind=kind
-      hand.innerHTML=icon('touch',35)+'<span>'+selected[0]+'</span>'
-      hand.setAttribute('aria-label',selected[0])
+    const title=kind==='site'?(carried?.verb??mission.goal):kind==='item'&&mission.method==='collect'?'보물 줍기':labels[kind]??'상호작용'
+    if(hand.dataset.label!==title){
+      hand.dataset.label=title
+      hand.innerHTML=icon('touch',35)+'<span>'+title+'</span>'
+      hand.setAttribute('aria-label',title)
     }
     hand.disabled=!near
     ui.querySelector('[data-action="drop"]').hidden=!me()?.carry||near?.kind==='drop'
@@ -229,13 +262,14 @@ function receive(world){
     reward(settings)
     const done=world.phase==='finished'
     const item=items.get(world.lastDelivery.item)
-    const text=done?'함께 배달을 다 마쳤어요!':item.name+' 배달 완료!'
+    const mission=activeMission()
+    const text=done?mission.success:mission.id==='delivery'?item.name+' 배달 완료!':item.name+' 완료!'
     hint(text,done?'★':'✓');talk(text)
-  }else if(world.phase==='active'&&lastPhase!=='active'&&session.role==='student')talk(guidance())
+  }else if(world.phase==='active'&&world.cycle!==lastCycle&&session.role==='student')talk(guidance())
   const carry=me()?.carry
   if(carry&&carry!==lastCarry&&session.role==='student')talk(guidance())
   lastCarry=carry
-  lastPhase=world.phase
+  lastCycle=world.cycle
 }
 
 async function request(event,payload){
@@ -249,8 +283,9 @@ function accept(reply){
   sessionStorage.setItem(roomKey,JSON.stringify(session))
   entryMessage='';panel=null;ready=true;screen='game';initializing=false
   snapshot=reply.world
+  if(session.role==='teacher')missionChoice=activeMission().id
   lastDelivery=snapshot.lastDelivery?snapshot.cycle+':'+snapshot.lastDelivery.item:''
-  lastPhase=snapshot.phase;lastCarry=me()?.carry
+  lastCycle=snapshot.cycle;lastCarry=me()?.carry
   scene.setSession(session.role,session.id)
   scene.overview(overview)
   scene.apply(snapshot)
@@ -262,7 +297,7 @@ function abandon(message=''){
   release()
   sessionStorage.removeItem(roomKey)
   session=null;snapshot=null;screen='lobby';panel=null;ready=false;initializing=false
-  lastDelivery='';lastPhase='';lastCarry=null;teacherZone='town';overview=false;near=null
+  lastDelivery='';lastCycle=0;lastCarry=null;teacherZone='town';overview=false;near=null
   stopSpeech();scene.clear();scene.overview(false);scene.show('lobby')
   entryMessage=message
   render()
@@ -344,7 +379,7 @@ async function onAction(action){
       setTimeout(()=>{if(element.isConnected){element.dataset.armed='false';element.querySelector('span').textContent='종료'}},3000)
     }else await request('teacher',{command:arg})
   }else if(name==='teacher'){
-    const reply=await request('teacher',{command:arg})
+    const reply=await request('teacher',{command:arg,mission:missionChoice})
     if(!reply.ok&&messages[reply.error])hint(messages[reply.error])
     if(reply.ok&&arg==='safe')hint('학생들이 배송 광장으로 이동했어요.','✓')
   }else if(name==='overview'){
@@ -372,11 +407,18 @@ function hitNear(action){
     return door&&(zone==='town'?distance(own.point,door.point)<=encounterRange:zone===target&&distance(own.point,exitPoint)<=encounterRange)
   }
   if(snapshot.phase!=='active')return false
+  if(kind==='checkout'){
+    const pending=snapshot.items.find(p=>p.id===target)
+    return zone===clerk.zone&&pending?.checkoutBy&&pending.checkoutBy!==own.id&&distance(own.point,clerk.point)<=clerk.range
+  }
   if(kind==='item'&&!own.carry){
     const item=snapshot.items.find(p=>p.id===target)
     return item?.zone===zone&&distance(own.point,item.point)<=encounterRange
   }
-  if(kind==='site'&&own.carry&&zone==='town')return distance(own.point,items.get(target).site)<=encounterRange
+  if(kind==='site'&&own.carry){
+    const site=activeMission().sites.find(p=>p.id===target)
+    return site&&site!==clerk&&zoneOf(site)===zone&&distance(own.point,site.point)<=encounterRange
+  }
   if(kind==='peer'&&own.carry){
     const friend=snapshot.players.find(p=>p.id===target)
     return friend?.zone===zone&&distance(own.point,friend.point)<=encounterRange
@@ -384,10 +426,9 @@ function hitNear(action){
   return false
 }
 
-function paintLabels(time){
+function paintLabels(){
   requestAnimationFrame(paintLabels)
-  if(screen!=='game'||time-viewTimer<85)return
-  viewTimer=time
+  if(screen!=='game')return
   const layer=document.getElementById('mp-tags')
   if(!layer)return
   const existing=new Set()
@@ -411,7 +452,8 @@ function paintLabels(time){
       if(tag.textContent!==text)tag.textContent=text
     }
     tag.dataset.position=point.position
-    tag.style.transform='translate('+point.x+'px,'+point.y+'px) translate(-50%,-50%)'
+    const transform='translate('+point.x+'px,'+point.y+'px) translate(-50%,-50%)'
+    if(tag.style.transform!==transform)tag.style.transform=transform
   }
   for(const tag of [...layer.children])if(!existing.has(tag.dataset.tag))tag.remove()
 }
@@ -461,6 +503,9 @@ if(scene){
     if(event.target.id==='mp-area'){
       teacherZone=event.target.value
       scene.show('game',currentZone())
+    }else if(event.target.id==='mp-mission'){
+      missionChoice=event.target.value
+      paintWorld()
     }
   })
   ui.addEventListener('pointerdown',event=>{
